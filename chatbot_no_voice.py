@@ -1,7 +1,7 @@
 """
 Modern Desktop Chatbot with Ollama Integration
 A ChatGPT-like interface built with Python Tkinter
-Features: Document Upload, Voice Assistant
+Features: Document Upload (Voice features disabled for compatibility)
 """
 
 import tkinter as tk
@@ -11,19 +11,12 @@ import json
 import threading
 from datetime import datetime
 import os
+import pickle
+from pathlib import Path
 
 # Document processing
 import PyPDF2
 import docx
-
-# Voice assistant
-try:
-    import speech_recognition as sr
-    import pyttsx3
-    VOICE_AVAILABLE = True
-except ImportError:
-    VOICE_AVAILABLE = False
-    print("Voice features disabled: Install pyaudio, SpeechRecognition, and pyttsx3 to enable")
 
 
 class ChatBotApp:
@@ -35,28 +28,19 @@ class ChatBotApp:
         
         # Conversation history for context
         self.conversation_history = []
+        self.current_chat_id = None
         
         # Document context
         self.document_context = ""
         self.current_document = None
         
+        # Chat storage
+        self.chat_storage_dir = Path("chat_history")
+        self.chat_storage_dir.mkdir(exist_ok=True)
+        
         # Ollama configuration
         self.ollama_url = "http://localhost:11434/api/generate"
-        self.model_name = "llama3.2:latest"  # Full model name with tag
-        
-        # Voice assistant setup
-        if VOICE_AVAILABLE:
-            self.recognizer = sr.Recognizer()
-            self.tts_engine = pyttsx3.init()
-            self.tts_engine.setProperty('rate', 175)  # Speed
-            self.tts_engine.setProperty('volume', 0.9)  # Volume
-            self.is_listening = False
-            self.voice_enabled = True
-        else:
-            self.recognizer = None
-            self.tts_engine = None
-            self.is_listening = False
-            self.voice_enabled = False
+        self.model_name = "llama3.2:latest"
         
         # Enhanced dark theme colors
         self.bg_color = "#0d1117"
@@ -76,12 +60,74 @@ class ChatBotApp:
         """Initialize the enhanced user interface"""
         self.root.configure(bg=self.bg_color)
         
-        # Main container
+        # Main container with sidebar
         main_container = tk.Frame(self.root, bg=self.bg_color)
         main_container.pack(fill=tk.BOTH, expand=True)
         
+        # Sidebar for chat history
+        self.sidebar = tk.Frame(main_container, bg=self.sidebar_bg, width=250)
+        self.sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        self.sidebar.pack_propagate(False)
+        
+        # Sidebar header
+        sidebar_header = tk.Frame(self.sidebar, bg=self.sidebar_bg)
+        sidebar_header.pack(fill=tk.X, padx=10, pady=10)
+        
+        tk.Label(
+            sidebar_header,
+            text="💬 Chat History",
+            font=("Segoe UI", 12, "bold"),
+            bg=self.sidebar_bg,
+            fg=self.text_color
+        ).pack(anchor=tk.W)
+        
+        # New chat button
+        new_chat_btn = tk.Button(
+            sidebar_header,
+            text="+ New Chat",
+            font=("Segoe UI", 9, "bold"),
+            bg=self.user_bubble,
+            fg="#ffffff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            command=self.new_chat
+        )
+        new_chat_btn.pack(fill=tk.X, pady=(10, 0))
+        
+        # Chat history list with scrollbar
+        history_frame = tk.Frame(self.sidebar, bg=self.sidebar_bg)
+        history_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        history_scrollbar = tk.Scrollbar(history_frame, bg=self.sidebar_bg)
+        history_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.history_listbox = tk.Listbox(
+            history_frame,
+            bg=self.sidebar_bg,
+            fg=self.text_color,
+            font=("Segoe UI", 9),
+            relief=tk.FLAT,
+            selectbackground=self.user_bubble,
+            selectforeground="#ffffff",
+            yscrollcommand=history_scrollbar.set,
+            activestyle='none'
+        )
+        self.history_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        history_scrollbar.config(command=self.history_listbox.yview)
+        
+        self.history_listbox.bind('<<ListboxSelect>>', self.load_selected_chat)
+        
+        # Load chat history
+        self.refresh_chat_history()
+        
+        # Main chat area
+        chat_container_main = tk.Frame(main_container, bg=self.bg_color)
+        chat_container_main.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
         # Header with gradient effect
-        header_frame = tk.Frame(main_container, bg=self.sidebar_bg, height=70)
+        header_frame = tk.Frame(chat_container_main, bg=self.sidebar_bg, height=70)
         header_frame.pack(fill=tk.X)
         header_frame.pack_propagate(False)
         
@@ -125,7 +171,7 @@ class ChatBotApp:
         model_label.pack(side=tk.TOP, anchor=tk.E)
         
         # Chat display area with custom canvas
-        chat_container = tk.Frame(main_container, bg=self.chat_bg)
+        chat_container = tk.Frame(chat_container_main, bg=self.chat_bg)
         chat_container.pack(fill=tk.BOTH, expand=True, padx=20, pady=(10, 0))
         
         # Canvas for custom scrollbar
@@ -159,7 +205,7 @@ class ChatBotApp:
         self.chat_canvas.bind("<Configure>", lambda e: self.chat_canvas.itemconfig(self.chat_canvas.find_withtag("all")[0], width=e.width))
         
         # Input area with border
-        input_container = tk.Frame(main_container, bg=self.bg_color)
+        input_container = tk.Frame(chat_container_main, bg=self.bg_color)
         input_container.pack(fill=tk.X, padx=20, pady=20)
         
         # Input frame with border effect
@@ -206,42 +252,6 @@ class ChatBotApp:
         self.upload_button.pack(side=tk.LEFT, padx=(0, 8))
         self.upload_button.bind("<Enter>", lambda e: self.upload_button.config(bg=self.input_border))
         self.upload_button.bind("<Leave>", lambda e: self.upload_button.config(bg=self.bot_bubble))
-        
-        # Voice input button
-        self.voice_button = tk.Button(
-            button_frame,
-            text="🎤" if VOICE_AVAILABLE else "🎤",
-            font=("Segoe UI", 12),
-            bg=self.bot_bubble,
-            fg=self.text_color if VOICE_AVAILABLE else "#555555",
-            relief=tk.FLAT,
-            padx=12,
-            pady=8,
-            cursor="hand2" if VOICE_AVAILABLE else "arrow",
-            command=self.toggle_voice_input if VOICE_AVAILABLE else lambda: messagebox.showinfo("Voice Disabled", "Install pyaudio to enable voice features")
-        )
-        self.voice_button.pack(side=tk.LEFT, padx=(0, 8))
-        if VOICE_AVAILABLE:
-            self.voice_button.bind("<Enter>", lambda e: self.voice_button.config(bg=self.input_border))
-            self.voice_button.bind("<Leave>", lambda e: self.voice_button.config(bg=self.bot_bubble))
-        
-        # Voice output toggle button
-        self.speaker_button = tk.Button(
-            button_frame,
-            text="🔊" if VOICE_AVAILABLE else "🔇",
-            font=("Segoe UI", 12),
-            bg=self.bot_bubble,
-            fg=self.text_color if VOICE_AVAILABLE else "#555555",
-            relief=tk.FLAT,
-            padx=12,
-            pady=8,
-            cursor="hand2" if VOICE_AVAILABLE else "arrow",
-            command=self.toggle_voice_output if VOICE_AVAILABLE else lambda: messagebox.showinfo("Voice Disabled", "Install pyaudio to enable voice features")
-        )
-        self.speaker_button.pack(side=tk.LEFT, padx=(0, 8))
-        if VOICE_AVAILABLE:
-            self.speaker_button.bind("<Enter>", lambda e: self.speaker_button.config(bg=self.input_border))
-            self.speaker_button.bind("<Leave>", lambda e: self.speaker_button.config(bg=self.bot_bubble))
         
         # Clear button
         self.clear_button = tk.Button(
@@ -304,6 +314,9 @@ class ChatBotApp:
         # Add to conversation history
         self.conversation_history.append({"role": "user", "content": user_message})
         
+        # Auto-save after user message
+        self.save_current_chat()
+        
         # Disable send button while processing
         self.send_button.config(state=tk.DISABLED, text="Thinking...")
         self.status_indicator.config(text="● Thinking...", fg="#f85149")
@@ -318,14 +331,136 @@ class ChatBotApp:
         self.chat_canvas.update_idletasks()
         self.chat_canvas.yview_moveto(1.0)
     
-    def clear_chat(self):
-        """Clear chat history"""
+    def new_chat(self):
+        """Start a new chat"""
+        # Save current chat if it has messages
+        if self.conversation_history:
+            self.save_current_chat()
+        
+        # Clear current chat
         for widget in self.chat_frame.winfo_children():
             widget.destroy()
         self.conversation_history = []
         self.document_context = ""
         self.current_document = None
+        self.current_chat_id = None
+        
+        # Refresh history list
+        self.refresh_chat_history()
+        
+        self.display_bot_message("Hello! 👋 I'm your AI assistant powered by Ollama. How can I help you today?")
+    
+    def clear_chat(self):
+        """Clear current chat without saving"""
+        for widget in self.chat_frame.winfo_children():
+            widget.destroy()
+        self.conversation_history = []
+        self.document_context = ""
+        self.current_document = None
+        self.current_chat_id = None
         self.display_bot_message("Chat cleared! How can I help you?")
+    
+    def save_current_chat(self):
+        """Save current chat to storage"""
+        if not self.conversation_history:
+            return
+        
+        # Generate chat ID if new
+        if not self.current_chat_id:
+            self.current_chat_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Get first user message as title
+        title = "New Chat"
+        for msg in self.conversation_history:
+            if msg["role"] == "user":
+                title = msg["content"][:50]
+                if len(msg["content"]) > 50:
+                    title += "..."
+                break
+        
+        # Save chat data
+        chat_data = {
+            "id": self.current_chat_id,
+            "title": title,
+            "timestamp": datetime.now().isoformat(),
+            "messages": self.conversation_history,
+            "document_context": self.document_context,
+            "document_name": self.current_document
+        }
+        
+        file_path = self.chat_storage_dir / f"{self.current_chat_id}.pkl"
+        with open(file_path, 'wb') as f:
+            pickle.dump(chat_data, f)
+        
+        self.refresh_chat_history()
+    
+    def refresh_chat_history(self):
+        """Refresh the chat history list"""
+        self.history_listbox.delete(0, tk.END)
+        
+        # Load all chat files
+        chat_files = sorted(self.chat_storage_dir.glob("*.pkl"), reverse=True)
+        
+        for chat_file in chat_files:
+            try:
+                with open(chat_file, 'rb') as f:
+                    chat_data = pickle.load(f)
+                    
+                # Format display
+                timestamp = datetime.fromisoformat(chat_data["timestamp"])
+                display_text = f"{timestamp.strftime('%m/%d %H:%M')} - {chat_data['title']}"
+                
+                self.history_listbox.insert(tk.END, display_text)
+                self.history_listbox.itemconfig(tk.END, {'bg': self.sidebar_bg})
+            except Exception as e:
+                print(f"Error loading chat: {e}")
+    
+    def load_selected_chat(self, event):
+        """Load selected chat from history"""
+        selection = self.history_listbox.curselection()
+        if not selection:
+            return
+        
+        # Save current chat first
+        if self.conversation_history:
+            self.save_current_chat()
+        
+        # Get selected chat file
+        chat_files = sorted(self.chat_storage_dir.glob("*.pkl"), reverse=True)
+        selected_index = selection[0]
+        
+        if selected_index >= len(chat_files):
+            return
+        
+        chat_file = chat_files[selected_index]
+        
+        try:
+            with open(chat_file, 'rb') as f:
+                chat_data = pickle.load(f)
+            
+            # Clear current chat display
+            for widget in self.chat_frame.winfo_children():
+                widget.destroy()
+            
+            # Load chat data
+            self.current_chat_id = chat_data["id"]
+            self.conversation_history = chat_data["messages"]
+            self.document_context = chat_data.get("document_context", "")
+            self.current_document = chat_data.get("document_name", None)
+            
+            # Display all messages
+            for msg in self.conversation_history:
+                if msg["role"] == "user":
+                    self.display_user_message(msg["content"])
+                else:
+                    self.display_bot_message(msg["content"])
+            
+            # Show document info if loaded
+            if self.current_document:
+                self.display_bot_message(f"📄 Document loaded: {self.current_document}")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load chat: {str(e)}")
     
     def upload_document(self):
         """Upload and process document (PDF, TXT, DOCX)"""
@@ -397,92 +532,6 @@ class ChatBotApp:
         for paragraph in doc.paragraphs:
             text += paragraph.text + "\n"
         return text
-    
-    def toggle_voice_input(self):
-        """Start voice input"""
-        if not VOICE_AVAILABLE:
-            messagebox.showinfo("Voice Disabled", "Install pyaudio to enable voice features")
-            return
-            
-        if self.is_listening:
-            return
-        
-        self.voice_button.config(text="🎙️", bg="#f85149")
-        self.is_listening = True
-        
-        # Run voice recognition in separate thread
-        thread = threading.Thread(target=self.listen_voice)
-        thread.daemon = True
-        thread.start()
-    
-    def listen_voice(self):
-        """Listen to voice input and convert to text"""
-        if not VOICE_AVAILABLE:
-            return
-            
-        try:
-            with sr.Microphone() as source:
-                self.root.after(0, lambda: self.display_bot_message("🎤 Listening... Speak now!"))
-                
-                # Adjust for ambient noise
-                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
-                
-                # Listen for audio
-                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
-                
-                self.root.after(0, lambda: self.display_bot_message("🔄 Processing speech..."))
-                
-                # Recognize speech using Google Speech Recognition
-                text = self.recognizer.recognize_google(audio)
-                
-                # Insert recognized text into input field
-                self.root.after(0, lambda: self.input_field.insert("1.0", text))
-                self.root.after(0, lambda: self.display_bot_message(f"✅ Recognized: \"{text}\""))
-                
-        except sr.WaitTimeoutError:
-            self.root.after(0, lambda: self.display_bot_message("⏱️ No speech detected. Please try again."))
-        except sr.UnknownValueError:
-            self.root.after(0, lambda: self.display_bot_message("❌ Could not understand audio. Please try again."))
-        except sr.RequestError as e:
-            self.root.after(0, lambda: self.display_bot_message(f"❌ Speech recognition error: {str(e)}"))
-        except Exception as e:
-            self.root.after(0, lambda: self.display_bot_message(f"❌ Error: {str(e)}"))
-        finally:
-            self.is_listening = False
-            self.root.after(0, lambda: self.voice_button.config(text="🎤", bg=self.bot_bubble))
-    
-    def toggle_voice_output(self):
-        """Toggle voice output on/off"""
-        if not VOICE_AVAILABLE:
-            messagebox.showinfo("Voice Disabled", "Install pyaudio to enable voice features")
-            return
-            
-        self.voice_enabled = not self.voice_enabled
-        if self.voice_enabled:
-            self.speaker_button.config(text="🔊")
-            self.display_bot_message("🔊 Voice output enabled")
-        else:
-            self.speaker_button.config(text="🔇")
-            self.display_bot_message("🔇 Voice output disabled")
-    
-    def speak_text(self, text):
-        """Convert text to speech"""
-        if not VOICE_AVAILABLE or not self.voice_enabled:
-            return
-        
-        def speak():
-            try:
-                # Remove emojis and special characters for better speech
-                clean_text = text.encode('ascii', 'ignore').decode('ascii')
-                self.tts_engine.say(clean_text)
-                self.tts_engine.runAndWait()
-            except Exception as e:
-                print(f"TTS Error: {e}")
-        
-        # Run TTS in separate thread
-        thread = threading.Thread(target=speak)
-        thread.daemon = True
-        thread.start()
     
     def display_user_message(self, message):
         """Display user message in chat with modern bubble design"""
@@ -631,7 +680,7 @@ class ChatBotApp:
                 prompt = f"""You have access to the following document content:
 
 --- DOCUMENT START ---
-{self.document_context[:4000]}  # Limit context to avoid token limits
+{self.document_context[:4000]}
 --- DOCUMENT END ---
 
 User question: {user_message}
@@ -673,8 +722,8 @@ Please answer based on the document content above."""
                 # Add to conversation history
                 self.conversation_history.append({"role": "assistant", "content": full_response})
                 
-                # Speak the response if voice is enabled
-                self.speak_text(full_response)
+                # Auto-save after bot response
+                self.save_current_chat()
                 
             else:
                 error_message = f"Error: Ollama API returned status code {response.status_code}"
