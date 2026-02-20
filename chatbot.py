@@ -1,14 +1,24 @@
 """
 Modern Desktop Chatbot with Ollama Integration
 A ChatGPT-like interface built with Python Tkinter
+Features: Document Upload, Voice Assistant
 """
 
 import tkinter as tk
-from tkinter import scrolledtext, messagebox, Canvas
+from tkinter import scrolledtext, messagebox, Canvas, filedialog
 import requests
 import json
 import threading
 from datetime import datetime
+import os
+
+# Document processing
+import PyPDF2
+import docx
+
+# Voice assistant
+import speech_recognition as sr
+import pyttsx3
 
 
 class ChatBotApp:
@@ -21,9 +31,21 @@ class ChatBotApp:
         # Conversation history for context
         self.conversation_history = []
         
+        # Document context
+        self.document_context = ""
+        self.current_document = None
+        
         # Ollama configuration
         self.ollama_url = "http://localhost:11434/api/generate"
         self.model_name = "llama3.2:latest"  # Full model name with tag
+        
+        # Voice assistant setup
+        self.recognizer = sr.Recognizer()
+        self.tts_engine = pyttsx3.init()
+        self.tts_engine.setProperty('rate', 175)  # Speed
+        self.tts_engine.setProperty('volume', 0.9)  # Volume
+        self.is_listening = False
+        self.voice_enabled = True
         
         # Enhanced dark theme colors
         self.bg_color = "#0d1117"
@@ -157,6 +179,57 @@ class ChatBotApp:
         button_frame = tk.Frame(input_frame, bg=self.input_bg)
         button_frame.pack(side=tk.RIGHT, padx=10)
         
+        # Upload document button
+        self.upload_button = tk.Button(
+            button_frame,
+            text="📄",
+            font=("Segoe UI", 12),
+            bg=self.bot_bubble,
+            fg=self.text_color,
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+            cursor="hand2",
+            command=self.upload_document
+        )
+        self.upload_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.upload_button.bind("<Enter>", lambda e: self.upload_button.config(bg=self.input_border))
+        self.upload_button.bind("<Leave>", lambda e: self.upload_button.config(bg=self.bot_bubble))
+        
+        # Voice input button
+        self.voice_button = tk.Button(
+            button_frame,
+            text="🎤",
+            font=("Segoe UI", 12),
+            bg=self.bot_bubble,
+            fg=self.text_color,
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+            cursor="hand2",
+            command=self.toggle_voice_input
+        )
+        self.voice_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.voice_button.bind("<Enter>", lambda e: self.voice_button.config(bg=self.input_border))
+        self.voice_button.bind("<Leave>", lambda e: self.voice_button.config(bg=self.bot_bubble))
+        
+        # Voice output toggle button
+        self.speaker_button = tk.Button(
+            button_frame,
+            text="🔊",
+            font=("Segoe UI", 12),
+            bg=self.bot_bubble,
+            fg=self.text_color,
+            relief=tk.FLAT,
+            padx=12,
+            pady=8,
+            cursor="hand2",
+            command=self.toggle_voice_output
+        )
+        self.speaker_button.pack(side=tk.LEFT, padx=(0, 8))
+        self.speaker_button.bind("<Enter>", lambda e: self.speaker_button.config(bg=self.input_border))
+        self.speaker_button.bind("<Leave>", lambda e: self.speaker_button.config(bg=self.bot_bubble))
+        
         # Clear button
         self.clear_button = tk.Button(
             button_frame,
@@ -237,7 +310,155 @@ class ChatBotApp:
         for widget in self.chat_frame.winfo_children():
             widget.destroy()
         self.conversation_history = []
+        self.document_context = ""
+        self.current_document = None
         self.display_bot_message("Chat cleared! How can I help you?")
+    
+    def upload_document(self):
+        """Upload and process document (PDF, TXT, DOCX)"""
+        file_path = filedialog.askopenfilename(
+            title="Select a document",
+            filetypes=[
+                ("All Supported", "*.pdf *.txt *.docx"),
+                ("PDF files", "*.pdf"),
+                ("Text files", "*.txt"),
+                ("Word documents", "*.docx")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            file_name = os.path.basename(file_path)
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            # Show processing message
+            self.display_bot_message(f"📄 Processing document: {file_name}...")
+            
+            # Extract text based on file type
+            if file_ext == '.pdf':
+                text = self.extract_pdf_text(file_path)
+            elif file_ext == '.txt':
+                text = self.extract_txt_text(file_path)
+            elif file_ext == '.docx':
+                text = self.extract_docx_text(file_path)
+            else:
+                self.display_bot_message("❌ Unsupported file format!")
+                return
+            
+            if text.strip():
+                self.document_context = text
+                self.current_document = file_name
+                word_count = len(text.split())
+                self.display_bot_message(
+                    f"✅ Document loaded successfully!\n\n"
+                    f"📄 File: {file_name}\n"
+                    f"📊 Words: {word_count:,}\n\n"
+                    f"You can now ask questions about this document!"
+                )
+            else:
+                self.display_bot_message("❌ Could not extract text from the document!")
+                
+        except Exception as e:
+            self.display_bot_message(f"❌ Error processing document: {str(e)}")
+    
+    def extract_pdf_text(self, file_path):
+        """Extract text from PDF file"""
+        text = ""
+        with open(file_path, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+        return text
+    
+    def extract_txt_text(self, file_path):
+        """Extract text from TXT file"""
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+            return file.read()
+    
+    def extract_docx_text(self, file_path):
+        """Extract text from DOCX file"""
+        doc = docx.Document(file_path)
+        text = ""
+        for paragraph in doc.paragraphs:
+            text += paragraph.text + "\n"
+        return text
+    
+    def toggle_voice_input(self):
+        """Start voice input"""
+        if self.is_listening:
+            return
+        
+        self.voice_button.config(text="🎙️", bg="#f85149")
+        self.is_listening = True
+        
+        # Run voice recognition in separate thread
+        thread = threading.Thread(target=self.listen_voice)
+        thread.daemon = True
+        thread.start()
+    
+    def listen_voice(self):
+        """Listen to voice input and convert to text"""
+        try:
+            with sr.Microphone() as source:
+                self.root.after(0, lambda: self.display_bot_message("🎤 Listening... Speak now!"))
+                
+                # Adjust for ambient noise
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
+                
+                # Listen for audio
+                audio = self.recognizer.listen(source, timeout=5, phrase_time_limit=10)
+                
+                self.root.after(0, lambda: self.display_bot_message("🔄 Processing speech..."))
+                
+                # Recognize speech using Google Speech Recognition
+                text = self.recognizer.recognize_google(audio)
+                
+                # Insert recognized text into input field
+                self.root.after(0, lambda: self.input_field.insert("1.0", text))
+                self.root.after(0, lambda: self.display_bot_message(f"✅ Recognized: \"{text}\""))
+                
+        except sr.WaitTimeoutError:
+            self.root.after(0, lambda: self.display_bot_message("⏱️ No speech detected. Please try again."))
+        except sr.UnknownValueError:
+            self.root.after(0, lambda: self.display_bot_message("❌ Could not understand audio. Please try again."))
+        except sr.RequestError as e:
+            self.root.after(0, lambda: self.display_bot_message(f"❌ Speech recognition error: {str(e)}"))
+        except Exception as e:
+            self.root.after(0, lambda: self.display_bot_message(f"❌ Error: {str(e)}"))
+        finally:
+            self.is_listening = False
+            self.root.after(0, lambda: self.voice_button.config(text="🎤", bg=self.bot_bubble))
+    
+    def toggle_voice_output(self):
+        """Toggle voice output on/off"""
+        self.voice_enabled = not self.voice_enabled
+        if self.voice_enabled:
+            self.speaker_button.config(text="🔊")
+            self.display_bot_message("🔊 Voice output enabled")
+        else:
+            self.speaker_button.config(text="🔇")
+            self.display_bot_message("🔇 Voice output disabled")
+    
+    def speak_text(self, text):
+        """Convert text to speech"""
+        if not self.voice_enabled:
+            return
+        
+        def speak():
+            try:
+                # Remove emojis and special characters for better speech
+                clean_text = text.encode('ascii', 'ignore').decode('ascii')
+                self.tts_engine.say(clean_text)
+                self.tts_engine.runAndWait()
+            except Exception as e:
+                print(f"TTS Error: {e}")
+        
+        # Run TTS in separate thread
+        thread = threading.Thread(target=speak)
+        thread.daemon = True
+        thread.start()
     
     def display_user_message(self, message):
         """Display user message in chat with modern bubble design"""
@@ -381,10 +602,24 @@ class ChatBotApp:
     def get_bot_response(self, user_message):
         """Get response from Ollama API with streaming"""
         try:
+            # Prepare the prompt with document context if available
+            if self.document_context:
+                prompt = f"""You have access to the following document content:
+
+--- DOCUMENT START ---
+{self.document_context[:4000]}  # Limit context to avoid token limits
+--- DOCUMENT END ---
+
+User question: {user_message}
+
+Please answer based on the document content above."""
+            else:
+                prompt = user_message
+            
             # Prepare the request payload
             payload = {
                 "model": self.model_name,
-                "prompt": user_message,
+                "prompt": prompt,
                 "stream": True
             }
             
@@ -413,6 +648,9 @@ class ChatBotApp:
                 
                 # Add to conversation history
                 self.conversation_history.append({"role": "assistant", "content": full_response})
+                
+                # Speak the response if voice is enabled
+                self.speak_text(full_response)
                 
             else:
                 error_message = f"Error: Ollama API returned status code {response.status_code}"

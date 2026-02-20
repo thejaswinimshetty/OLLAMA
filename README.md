@@ -11,11 +11,15 @@ A modern, ChatGPT-like desktop chatbot application built with Python Tkinter and
 - 🧠 Conversation context memory
 - 🎯 Clean and intuitive interface
 - ⚠️ Proper error handling
+- 📄 **Document Upload** (PDF, TXT, DOCX) - Ask questions about your documents
+- 🎤 **Voice Input** - Speak your questions
+- 🔊 **Voice Output** - Listen to AI responses (Text-to-Speech)
 
 ## Prerequisites
 
 1. **Python 3.7+** installed on your system
 2. **Ollama** installed and running
+3. **Microphone** (for voice input feature)
 
 ### Install Ollama
 
@@ -36,6 +40,14 @@ ollama pull llama3
 ```bash
 pip install -r requirements.txt
 ```
+
+**Note for Windows users:** If you encounter issues installing PyAudio, download the appropriate wheel file from [here](https://www.lfd.uci.edu/~gohlke/pythonlibs/#pyaudio) and install it:
+
+```bash
+pip install PyAudio-0.2.11-cp3xx-cp3xx-win_amd64.whl
+```
+
+Replace `cp3xx` with your Python version (e.g., `cp311` for Python 3.11).
 
 ## Usage
 
@@ -60,9 +72,31 @@ python chatbot.py
 ### Step 3: Start Chatting!
 
 - Type your message in the input field at the bottom
-- Press Enter or click "Send" to send your message
+- Press Enter or click "Send ➤" to send your message
 - Use Shift+Enter for multiline messages
 - Watch the bot's response stream in real-time
+
+### Step 4: Use Advanced Features
+
+**Document Upload (📄):**
+1. Click the 📄 button
+2. Select a PDF, TXT, or DOCX file
+3. Ask questions about the document content
+4. Example: "Summarize this document" or "What are the key points?"
+
+**Voice Input (🎤):**
+1. Click the 🎤 button
+2. Speak your question clearly
+3. The text will appear in the input field
+4. Click Send or press Enter
+
+**Voice Output (🔊/🔇):**
+1. Click 🔊 to enable voice responses
+2. The AI will speak its answers
+3. Click 🔇 to disable voice output
+
+**Clear Chat (🗑️):**
+- Click 🗑️ to clear conversation history and document context
 
 ## Configuration
 
@@ -114,11 +148,45 @@ ollama pull llama3
 - Try a smaller model like `phi` or `mistral`
 - Ensure your system has adequate RAM
 
+### Voice Input Not Working
+
+- Check microphone permissions
+- Ensure microphone is connected and working
+- Test with: `python -m speech_recognition`
+- Requires internet for Google Speech Recognition
+
+### Document Upload Issues
+
+- Ensure file is not corrupted
+- Check file permissions
+- Large documents may take time to process
+- PDF files must contain extractable text (not scanned images)
+
 ## Keyboard Shortcuts
 
 - **Enter**: Send message
 - **Shift+Enter**: New line in message
 - **Ctrl+C**: Close application (in terminal)
+
+## Supported Document Formats
+
+- **PDF** (.pdf) - Portable Document Format
+- **Text** (.txt) - Plain text files
+- **Word** (.docx) - Microsoft Word documents
+
+## Voice Features
+
+**Voice Input:**
+- Uses Google Speech Recognition
+- Requires internet connection
+- Supports multiple languages
+- 10-second recording limit per input
+
+**Voice Output:**
+- Uses pyttsx3 (offline TTS)
+- Works without internet
+- Adjustable speed and volume
+- Toggle on/off with 🔊/🔇 button
 
 ## Technical Details
 
@@ -127,6 +195,9 @@ ollama pull llama3
 - **Streaming**: Real-time response streaming
 - **Threading**: Non-blocking UI with background API calls
 - **Context**: Maintains conversation history
+- **Document Processing**: PyPDF2, python-docx
+- **Voice Recognition**: SpeechRecognition (Google API)
+- **Text-to-Speech**: pyttsx3 (offline)
 
 ## License
 
